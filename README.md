@@ -4,7 +4,7 @@ Ranks major-league starting pitchers on how well they generate long outings,
 from Baseball Savant pitch-level data. Rebuilds and redeploys itself every
 morning via GitHub Actions.
 
-**Live app:** `https://<your-account>.shinyapps.io/mlb-outing-length/`
+**Live app:** https://milkmen.shinyapps.io/mlb-outing-length/
 
 ## The metric
 
