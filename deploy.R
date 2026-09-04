@@ -10,6 +10,23 @@
 #   SHINY_SECRET    the matching secret
 # =============================================================================
 
+# Give every repository NAME a resolvable URL before building the manifest.
+#
+# CI installs packages from Posit Package Manager (setup-r's use-public-rspm),
+# so each package's DESCRIPTION carries `Repository: RSPM`. rsconnect/renv
+# records that name in the manifest and then asks getOption("repos") to turn it
+# into a URL. If "RSPM" isn't a key there, the name is emitted verbatim and the
+# shinyapps.io build server fails with:
+#
+#   Error fetching data.table source. Error downloading package source:
+#   Unsupported url scheme: RSPM/src/contrib/data.table_1.18.6.1.tar.gz
+#
+# Mapping RSPM to its real URL fixes that while keeping CI's fast binary
+# installs. CRAN stays as the fallback for anything installed from there.
+options(repos = c(
+  RSPM = "https://packagemanager.posit.co/cran/latest",
+  CRAN = "https://cloud.r-project.org"))
+
 SCRIPT_DIR <- local({
   a <- commandArgs(FALSE)
   f <- sub("^--file=", "", a[grep("^--file=", a)])
