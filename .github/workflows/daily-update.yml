@@ -36,6 +36,17 @@ jobs:
           r-version: release
           use-public-rspm: true      # binary packages; source builds are slow
 
+      # cpp11 / Rcpp / later are build-only (LinkingTo) dependencies that pak
+      # correctly skips when installing binaries, but rsconnect's renv snapshot
+      # runs a pre-flight check that demands they be installed anyway. Without
+      # cpp11 the deploy dies at "aborting snapshot due to pre-flight validation
+      # failure - required package(s) not installed: cpp11", which isoband pulls
+      # in via ggplot2. The other two are listed pre-emptively rather than found
+      # one failed deploy at a time.
+      #
+      # These comments live OUTSIDE the packages block on purpose: `packages: |`
+      # is a YAML literal block scalar, so a `#` line inside it is not a comment
+      # -- it gets handed to pak as R code, which fails with "unexpected symbol".
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           packages: |
@@ -49,23 +60,10 @@ jobs:
             any::DT
             any::ggrepel
             any::rsconnect
-            # Build-only (LinkingTo) dependencies that pak correctly skips when
-            # installing binaries, but that rsconnect's renv snapshot insists on
-            # seeing installed before it will build a manifest. Without cpp11 the
-            # deploy dies at "aborting snapshot due to pre-flight validation
-            # failure - required package(s) not installed: cpp11", which isoband
-            # pulls in via ggplot2. The others are listed pre-emptively for the
-            # same reason rather than discovering them one failed deploy at a time.
             any::cpp11
             any::Rcpp
             any::later
 
-      # The pitch chunks are the expensive part to acquire and they never change
-      # once settled, so they persist between runs. Keying on run_id guarantees
-      # a miss (so a fresh entry is always written) while restore-keys pulls the
-      # most recent one back -- the standard rolling-cache pattern. Without this
-      # every night would re-download the full season for no reason and lean on
-      # Savant far harder than the job needs to.
       - name: Restore Savant chunk cache
         uses: actions/cache@v4
         with:
