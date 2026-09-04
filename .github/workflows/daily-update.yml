@@ -49,6 +49,16 @@ jobs:
             any::DT
             any::ggrepel
             any::rsconnect
+            # Build-only (LinkingTo) dependencies that pak correctly skips when
+            # installing binaries, but that rsconnect's renv snapshot insists on
+            # seeing installed before it will build a manifest. Without cpp11 the
+            # deploy dies at "aborting snapshot due to pre-flight validation
+            # failure - required package(s) not installed: cpp11", which isoband
+            # pulls in via ggplot2. The others are listed pre-emptively for the
+            # same reason rather than discovering them one failed deploy at a time.
+            any::cpp11
+            any::Rcpp
+            any::later
 
       # The pitch chunks are the expensive part to acquire and they never change
       # once settled, so they persist between runs. Keying on run_id guarantees
