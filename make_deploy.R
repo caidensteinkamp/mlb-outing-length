@@ -22,9 +22,17 @@
 # hitting its memory ceiling while someone is reading it.
 # =============================================================================
 
-# Overridable so the scheduled CI job can point these at a checkout instead of
-# a path on one particular Mac.
-CODE_DIR   <- Sys.getenv("OL_CODE_DIR", "/Users/caidensteinkamp/Downloads/Code")
+# Default to the directory this script lives in, NOT a hardcoded path. Running
+# it from a clone with only OL_SRC_BUNDLE set used to silently build into
+# ~/Downloads/Code and leave the checkout untouched, so the deploy step then
+# looked for an app directory that was never written. Wherever this file sits is
+# where its inputs and outputs belong.
+SCRIPT_DIR <- local({
+  a <- commandArgs(FALSE)
+  f <- sub("^--file=", "", a[grep("^--file=", a)])
+  if (length(f)) normalizePath(dirname(f[1])) else getwd()
+})
+CODE_DIR   <- Sys.getenv("OL_CODE_DIR", SCRIPT_DIR)
 DEPLOY_DIR <- Sys.getenv("OL_DEPLOY_DIR", file.path(CODE_DIR, "mlb_outing_deploy"))
 
 args   <- commandArgs(trailingOnly = TRUE)

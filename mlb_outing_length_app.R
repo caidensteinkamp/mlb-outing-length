@@ -4,7 +4,7 @@
 # Reads the bundle written by mlb_outing_length.R and ranks starting pitchers on
 # how well they generate long outings.
 #
-#   shiny::runApp("/Users/caidensteinkamp/Downloads/Code/mlb_outing_length_app.R")
+#   shiny::runApp("mlb_outing_length_app.R")      # from the repo directory
 #
 # This is the Butler outing-length app pointed at Baseball Savant and turned
 # around. The Butler version was PRESCRIPTIVE -- it took a staff we control and
@@ -36,16 +36,31 @@ library(DT)
 library(ggrepel)
 
 # Bundle resolution, in priority order:
-#   1. OL_BUNDLE env var          -- view a single season locally, e.g.
-#      OL_BUNDLE=.../mlb_outing_bundle_2026.rds Rscript -e 'shiny::runApp(...)'
-#   2. data/bundle.rds            -- how a DEPLOYED copy finds its data. On
+#   1. OL_BUNDLE env var  -- view a specific bundle, e.g.
+#      OL_BUNDLE=mlb_outing_bundle.rds Rscript -e 'shiny::runApp(...)'
+#   2. data/bundle.rds    -- how a DEPLOYED copy finds its data. On
 #      shinyapps.io the working directory is the app directory, so the slim
 #      bundle written by make_deploy.R sits right here beside app.R.
-#   3. the local pooled 2025+2026 bundle
+#   3. a bundle next to this file, 2026-only first, then the pooled one.
+#
+# Nothing here is an absolute path. A hardcoded ~/Downloads path used to sit at
+# the end of this chain, which worked but made rsconnect warn on every deploy
+# that the project references files outside itself -- fair, since that path
+# exists on exactly one machine and never on the server.
 BUNDLE <- local({
-  if (nzchar(Sys.getenv("OL_BUNDLE"))) return(Sys.getenv("OL_BUNDLE"))
-  if (file.exists("data/bundle.rds")) return("data/bundle.rds")
-  "/Users/caidensteinkamp/Downloads/Code/mlb_outing_bundle.rds"
+  env <- Sys.getenv("OL_BUNDLE")
+  if (nzchar(env)) return(env)
+  if (file.exists(file.path("data", "bundle.rds"))) return(file.path("data", "bundle.rds"))
+  here <- local({
+    a <- commandArgs(FALSE)
+    f <- sub("^--file=", "", a[grep("^--file=", a)])
+    if (length(f)) normalizePath(dirname(f[1])) else getwd()
+  })
+  for (nm in c("mlb_outing_bundle_2026.rds", "mlb_outing_bundle.rds")) {
+    p <- file.path(here, nm)
+    if (file.exists(p)) return(p)
+  }
+  file.path(here, "mlb_outing_bundle.rds")   # reported by the check below
 })
 
 if (!file.exists(BUNDLE))
