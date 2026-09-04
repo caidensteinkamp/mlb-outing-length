@@ -1,0 +1,105 @@
+name: Daily leaderboard update
+
+# 11:40 UTC = 7:40am ET. Late enough that every West Coast game from the night
+# before is final and posted to Savant, early enough that the board is fresh
+# before anyone looks at it. Statcast revises recent days, which the fetcher
+# handles by re-pulling any date window inside its OL_FRESH_DAYS horizon rather
+# than trusting a cached one.
+on:
+  schedule:
+    - cron: "40 11 * * *"
+  workflow_dispatch:        # lets you run it by hand from the Actions tab
+
+# A second run starting while the first is still deploying would race on the
+# same shinyapps.io app, so newer runs wait rather than overlap.
+concurrency:
+  group: leaderboard-deploy
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90     # a cold first run pulls the whole season (~30 min)
+
+    env:
+      OL_RAW_DIR:    savant_data/mlb_raw
+      OL_SEASONS:    "2026"
+      OL_OUT_RDS:    mlb_outing_bundle_2026.rds
+      OL_CODE_DIR:   .
+      OL_DEPLOY_DIR: mlb_outing_deploy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: release
+          use-public-rspm: true      # binary packages; source builds are slow
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          packages: |
+            any::data.table
+            any::dplyr
+            any::tidyr
+            any::purrr
+            any::stringr
+            any::ggplot2
+            any::shiny
+            any::DT
+            any::ggrepel
+            any::rsconnect
+
+      # The pitch chunks are the expensive part to acquire and they never change
+      # once settled, so they persist between runs. Keying on run_id guarantees
+      # a miss (so a fresh entry is always written) while restore-keys pulls the
+      # most recent one back -- the standard rolling-cache pattern. Without this
+      # every night would re-download the full season for no reason and lean on
+      # Savant far harder than the job needs to.
+      - name: Restore Savant chunk cache
+        uses: actions/cache@v4
+        with:
+          path: savant_data
+          key: savant-2026-${{ github.run_id }}
+          restore-keys: |
+            savant-2026-
+
+      - name: Fetch new pitch data
+        run: Rscript mlb_savant_fetch.R 2026
+
+      - name: Rebuild leaderboard
+        run: Rscript mlb_outing_length.R
+
+      - name: Build slim app bundle
+        run: Rscript make_deploy.R 2026
+        env:
+          OL_SRC_BUNDLE: mlb_outing_bundle_2026.rds
+
+      # Fails the run before touching shinyapps.io if any render path is broken,
+      # so a bad bundle can never replace a working live app.
+      - name: Smoke test the app
+        run: Rscript smoke_test.R mlb_outing_deploy
+
+      - name: Deploy to shinyapps.io
+        run: Rscript deploy.R
+        env:
+          SHINY_ACCOUNT:  ${{ secrets.SHINYAPPS_ACCOUNT }}
+          SHINY_TOKEN:    ${{ secrets.SHINYAPPS_TOKEN }}
+          SHINY_SECRET:   ${{ secrets.SHINYAPPS_SECRET }}
+          SHINY_APP_NAME: mlb-outing-length
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Leaderboard update"
+            echo ""
+            Rscript -e '
+              b <- readRDS("mlb_outing_deploy/data/bundle.rds")
+              d <- as.data.frame(b$board)
+              d <- d[order(-d$xouts), ][1:5, c("name","starts","xouts","rv100")]
+              cat("Qualified starters:", nrow(b$board), "\n\n")
+              cat("| Pitcher | GS | xIP/st | RS/100 |\n|---|---|---|---|\n")
+              for (i in 1:5) cat(sprintf("| %s | %d | %.2f | %+.2f |\n",
+                d$name[i], d$starts[i], d$xouts[i]/3, d$rv100[i]))' 2>/dev/null || echo "(bundle unavailable)"
+          } >> "$GITHUB_STEP_SUMMARY"

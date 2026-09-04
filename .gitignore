@@ -1,0 +1,16 @@
+# Raw pitch data. 33 MB per season and fully reproducible from Savant, so it
+# lives in the GitHub Actions cache rather than in git history.
+savant_data/
+
+# Analysis bundles and the generated deploy directory are build artifacts. The
+# scheduled job recreates both from scratch on every run.
+*.rds
+mlb_outing_deploy/
+
+# rsconnect writes deployment records containing the account name.
+rsconnect/
+
+.Rproj.user
+.Rhistory
+.RData
+.DS_Store
