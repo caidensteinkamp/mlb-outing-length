@@ -73,6 +73,9 @@ outings <- as.data.table(B$outings)
 mix     <- as.data.table(B$mix)
 prof    <- as.data.table(B$prof)
 xo      <- as.data.table(B$xo)
+starts_daily  <- as.data.table(B$starts_daily)
+track_pitches <- as.data.table(B$track_pitches)
+`%||%` <- function(a, b) if (is.null(a)) b else a
 V       <- B$V_lg
 LG_X    <- B$lg_xouts
 SEASONS <- paste(B$meta$seasons, collapse = " + ")
@@ -135,6 +138,28 @@ ui <- fluidPage(
             "allowed to go deeper than his stuff earned, negative means he was ",
             "pulled early relative to what he earned."),
           DTOutput("t_board")),
+
+        tabPanel("Daily tracker",
+          tags$p(style = "color:#555",
+            "Every start on a given day, and whether it ", tags$b("extended"),
+            " or ", tags$b("shortened"), " that pitcher's outing. Two different ",
+            "senses of that are shown, because they can disagree and each ",
+            "answers a different question."),
+          tags$p(style = "color:#555",
+            tags$b("OLV"), " is the outs of outing he gained or lost across the ",
+            "start, against a league-average pitch from the same count and ",
+            "base-out state. It is the framework's own measure and it is ",
+            tags$i("independent of the manager"), " -- a starter pulled after ",
+            "four innings can still post a strongly positive OLV, because it ",
+            "prices the events he generated, not how long he was left in. ",
+            tags$b("vs xIP"), " is actual innings minus the outing length his ",
+            "own season pitch economy predicts, so that one ",
+            tags$i("does"), " include the manager's decision."),
+          fluidRow(
+            column(4, selectInput("track_date", "Date", choices = NULL)),
+            column(8, htmlOutput("track_summary"))),
+          plotOutput("p_track", height = "520px"),
+          br(), DTOutput("t_track")),
 
         tabPanel("Two axes",
           tags$p(style = "color:#555",
@@ -291,6 +316,95 @@ server <- function(input, output, session) {
               options = list(pageLength = 25, order = list()),
               caption = "Sorted by xOuts/start. Click any header to re-sort.") |>
       formatStyle("xOuts/st", fontWeight = "bold")
+  })
+
+  # ---- daily tracker --------------------------------------------------------
+  # Dates come from the data rather than a free date picker: a calendar widget
+  # invites picking an off-day or a date outside the season and getting an empty
+  # page, which reads as a broken app rather than "no games".
+  observe({
+    d <- sort(unique(as.character(starts_daily$game_date)), decreasing = TRUE)
+    updateSelectInput(session, "track_date", choices = d, selected = d[1])
+  })
+
+  track_day <- reactive({
+    req(input$track_date)
+    d <- starts_daily[as.character(game_date) == input$track_date]
+    setorder(d, -olv_start)
+    d
+  })
+
+  output$track_summary <- renderUI({
+    d <- track_day()
+    validate(need(nrow(d), "No qualified starts on this date."))
+    up <- sum(d$olv_start > 0); dn <- sum(d$olv_start <= 0)
+    HTML(sprintf(
+      "<div style='padding-top:22px'><b>%d starts</b> &nbsp;|&nbsp;
+       <span style='color:#2c6fa8'><b>%d extended</b></span> &nbsp;
+       <span style='color:#b03a2e'><b>%d shortened</b></span> &nbsp;|&nbsp;
+       best <b>%s</b> (%+.2f) &nbsp; worst <b>%s</b> (%+.2f)</div>",
+      nrow(d), up, dn,
+      d$name[1], d$olv_start[1],
+      d$name[nrow(d)], d$olv_start[nrow(d)]))
+  })
+
+  output$p_track <- renderPlot({
+    d <- track_day()
+    validate(need(nrow(d), "No qualified starts on this date."))
+    tp <- track_pitches[as.character(game_date) == input$track_date &
+                          game_pk %in% d$game_pk]
+    validate(need(nrow(tp), paste(
+      "Pitch-by-pitch detail is only carried for the most recent",
+      B$meta$TRACK_DAYS %||% 35, "days. The table below still works.")))
+
+    tp <- merge(tp, d[, .(game_pk, pitcher, name)],
+                by = c("game_pk", "pitcher"))
+    # label each line once, at its final pitch
+    ends <- tp[, .SD[which.max(pitch_no)], by = .(game_pk, pitcher)]
+    ends[, gained := cum_olv > 0]
+    # Colour the whole line by how the outing ENDED, so a line's colour matches
+    # its endpoint. This has to be a real column: `cum_olv[.N]` inside aes() is
+    # data.table syntax that ggplot does not evaluate.
+    tp <- merge(tp, ends[, .(game_pk, pitcher, gained)],
+                by = c("game_pk", "pitcher"))
+
+    ggplot(tp, aes(pitch_no, cum_olv, group = interaction(game_pk, pitcher))) +
+      geom_hline(yintercept = 0, colour = "grey30", linewidth = .6) +
+      geom_line(aes(colour = gained), linewidth = .7, alpha = .75,
+                show.legend = FALSE) +
+      geom_point(data = ends, aes(colour = gained), size = 2.4,
+                 show.legend = FALSE) +
+      ggrepel::geom_text_repel(data = ends, aes(label = name, colour = gained),
+                               size = 3.2, direction = "y", hjust = 0,
+                               nudge_x = 4, segment.size = .25,
+                               max.overlaps = 30, show.legend = FALSE, seed = 3) +
+      scale_colour_manual(values = c(`TRUE` = "steelblue4", `FALSE` = "firebrick")) +
+      expand_limits(x = max(tp$pitch_no) * 1.18) +
+      labs(title = paste("Outing length gained or lost through the start --",
+                         input$track_date),
+           subtitle = paste("Cumulative OLV in outs of outing. Above the line he",
+                            "bought himself outing length;\nbelow it he spent it.",
+                            "Where a line turns is where the outing turned."),
+           x = "Pitch number", y = "Cumulative OLV (outs of outing)") +
+      theme_minimal(base_size = 13)
+  })
+
+  output$t_track <- renderDT({
+    d <- track_day()
+    validate(need(nrow(d), "No qualified starts on this date."))
+    datatable(
+      d[, .(Pitcher = name, Thr = p_throws, Opp = opp,
+            IP = sprintf("%d.%d", outs %/% 3, outs %% 3),
+            P = pitches, K = k, BB = bb, R = runs,
+            OLV = round(olv_start, 2), `OLV/100` = round(olv100, 2),
+            `xIP/st` = round(xouts / 3, 2),
+            `vs xIP` = round((outs - xouts) / 3, 2),
+            Verdict = fifelse(olv_start > 0, "extended", "shortened"))],
+      rownames = FALSE, options = list(dom = "t", pageLength = 20)) |>
+      formatStyle("OLV", color = styleInterval(0, c("#b03a2e", "#2c6fa8")),
+                  fontWeight = "bold") |>
+      formatStyle("Verdict", color = styleEqual(c("extended", "shortened"),
+                                                c("#2c6fa8", "#b03a2e")))
   })
 
   # ---- two axes -------------------------------------------------------------

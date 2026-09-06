@@ -18,7 +18,16 @@ on.exit(setwd(old), add = TRUE)
 
 OUTPUTS <- c("scorecard", "card_title", "t_board", "t_both", "t_mix",
              "t_long", "t_short", "t_econ", "p_quad", "p_sources",
-             "p_card", "p_hist", "p_leash", "p_outcome", "p_ole")
+             "p_card", "p_hist", "p_leash", "p_outcome", "p_ole",
+             "track_summary", "p_track", "t_track")
+
+# The tracker outputs req() a date, and updateSelectInput does not populate an
+# input in testServer (there is no client to echo it back), so a valid date has
+# to be supplied explicitly or every tracker output aborts silently.
+TRACK_DATE <- local({
+  b <- readRDS(file.path("data", "bundle.rds"))
+  max(as.character(b$starts_daily$game_date))
+})
 
 shiny::testServer(shiny::shinyAppFile("app.R"), {
   failures <- character()
@@ -31,7 +40,7 @@ shiny::testServer(shiny::shinyAppFile("app.R"), {
     }
   }
 
-  session$setInputs(min_gs = 14, hand = c("R", "L"))
+  session$setInputs(min_gs = 14, hand = c("R", "L"), track_date = TRACK_DATE)
   probe("both hands")
 
   session$setInputs(hand = "L")

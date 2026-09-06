@@ -31,6 +31,32 @@ expensive on the pitch count. Across 159 qualified starters, the correlation
 between strikeout rate and expected outing length is **+0.011** — nothing at
 all. With walk rate it is **−0.685**.
 
+## Daily tracker
+
+The leaderboard is a season verdict; the **Daily tracker** tab is the
+game-by-game one. Pick a date and it shows every qualified start that day, a
+cumulative-OLV curve through each outing, and whether the start extended or
+shortened that pitcher's outing length.
+
+Two senses of "extended" are reported side by side, because they disagree in
+informative ways:
+
+- **OLV** — outs of outing gained or lost across the start, against a
+  league-average pitch from the same count and base-out state. Framework-native
+  and *independent of the manager*: a starter pulled after four innings can
+  still post a strongly positive OLV, because it prices the events he generated.
+- **vs xIP** — actual innings minus the outing length his own season pitch
+  economy predicts. This one *does* include the manager's decision.
+
+On 2026-09-03, Shane McClanahan went +1.97 OLV but −0.24 vs xIP (he generated
+outing length and was pulled at 72 pitches anyway); Hunter Brown was the mirror
+image at −0.40 OLV and +1.16 vs xIP. Neither column alone tells you that.
+
+Pitch-level detail for the curves is retained for the last `OL_TRACK_DAYS` days
+(default 35) — the full season would be ~600k rows in a bundle that is otherwise
+under a megabyte, and nobody opens a tracker to read April. The per-start table
+covers the whole season regardless.
+
 ## Pipeline
 
 | Script | Does | Runtime |

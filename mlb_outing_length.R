@@ -174,6 +174,8 @@ pa <- raw[, .(
     game_year    = first(game_year),
     inning       = first(inning),
     inning_topbot= first(inning_topbot),
+    home_team    = first(home_team),
+    away_team    = first(away_team),
     outs_before  = first(outs_when_up),
     pa_pitches   = .N,
     events       = last(events),
@@ -687,14 +689,79 @@ prof <- spk[pitcher %in% qual$pitcher, .(
 lg_prof <- spk[, .(ball = mean(e == "ball"), strike = mean(e == "strike"),
                    foul = mean(e == "foul"), inplay = mean(e == "inplay"))]
 
+# -----------------------------------------------------------------------------
+# 11. Daily tracker: how each start moved that pitcher's outing length
+# -----------------------------------------------------------------------------
+# The leaderboard is a season verdict. This is the game-by-game one: for a given
+# day, which starters generated the events that buy outing length and which
+# spent it.
+#
+# Two different senses of "extended or shortened" are reported, because they
+# answer different questions and can disagree:
+#
+#   olv_start  -- the sum of per-pitch OLV across the outing. Outs of outing
+#                 gained or lost against a LEAGUE-AVERAGE pitch from the same
+#                 state. This is the framework-native measure and it is
+#                 independent of the manager: a starter yanked after 4 innings
+#                 can still post a strongly positive OLV.
+#   vs_x       -- actual outs minus his own season xOuts. Did this start beat
+#                 the outing length his own pitch economy predicts? This one
+#                 DOES include the manager's decision, which is why both are
+#                 shown rather than picking one.
+TRACK_DAYS <- as.integer(Sys.getenv("OL_TRACK_DAYS", "35"))
+
+# The opponent is whoever was batting: a Top half is the away team hitting, so
+# the pitcher is the home club's and his opponent is the away side.
+sp[, opp := fifelse(inning_topbot == "Top", away_team, home_team)]
+
+starts_daily <- sp[, .(
+    game_date = first(game_date),
+    opp       = first(opp),
+    outs      = sum(outs_made),
+    pitches   = sum(pa_pitches),
+    runs      = sum(runs),
+    olv_start = sum(olv_pa, na.rm = TRUE),
+    bb        = sum(outcome == "BB", na.rm = TRUE),
+    k         = sum(outcome == "K",  na.rm = TRUE)
+  ), by = .(game_pk, pitcher)]
+
+starts_daily <- merge(starts_daily, board[, .(pitcher, name, p_throws, xouts)],
+                      by = "pitcher", all.x = TRUE)
+starts_daily <- starts_daily[!is.na(name)]     # qualified starters only
+starts_daily[, `:=`(vs_x   = outs - xouts,
+                    olv100 = 100 * olv_start / pmax(pitches, 1))]
+setorder(starts_daily, -game_date, -olv_start)
+
+cat(sprintf("\ntracker: %s starts across %s dates (%s .. %s)\n",
+            format(nrow(starts_daily), big.mark = ","),
+            uniqueN(starts_daily$game_date),
+            min(starts_daily$game_date), max(starts_daily$game_date)))
+
+# Pitch-level cumulative OLV, so the app can draw WHERE in the outing he gained
+# or lost it. Kept only for recent dates -- the full season would be ~600k rows
+# in a bundle that is otherwise under a megabyte, and nobody opens a tracker to
+# read April.
+recent_from <- max(as.Date(spk$game_date)) - TRACK_DAYS
+track_pitches <- spk[as.Date(game_date) >= recent_from & pitcher %in% board$pitcher,
+  .(game_pk, pitcher, game_date, pitch_no = p_before + 1L, inning,
+    olv = round(olv, 4), e)]
+setorder(track_pitches, game_pk, pitcher, pitch_no)
+track_pitches[, cum_olv := round(cumsum(olv), 4), by = .(game_pk, pitcher)]
+track_pitches[, olv := NULL]        # only the running total is ever plotted
+
+cat(sprintf("tracker pitch detail: %s pitches over the last %d days (%.2f MB)\n",
+            format(nrow(track_pitches), big.mark = ","), TRACK_DAYS,
+            as.numeric(object.size(track_pitches)) / 1e6))
+
 saveRDS(list(
   board = board, outings = outings, sp = sp, economy = economy,
   outcome_value = outcome_value, V_lg = V_lg, haz_mod = haz_mod,
   tp_lg = tp_lg, bip_lg = bip_lg, xouts_by_year = ys_wide,
   pitcher_cell = pitcher_cell, bip_p = bip_p, pnames = pnames,
   mix = mix, prof = prof, lg_prof = lg_prof, xo = xo,
+  starts_daily = starts_daily, track_pitches = track_pitches,
   lg_xouts = V_lg[1, 1, 1, 1, 1],
   meta = list(seasons = SEASONS, PMAX = PMAX, MIN_STARTS = MIN_STARTS,
-              K_SHRINK = K_SHRINK, K_BIP = K_BIP)
+              K_SHRINK = K_SHRINK, K_BIP = K_BIP, TRACK_DAYS = TRACK_DAYS)
 ), OUT_RDS, compress = "xz")
 cat("\nwrote ", OUT_RDS, "\n", sep = "")

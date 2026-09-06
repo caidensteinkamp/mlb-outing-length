@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "outing-app",
+      "runtimeExecutable": "Rscript",
+      "runtimeArgs": ["-e", "shiny::runApp('mlb_outing_deploy', port = 4599, host = '127.0.0.1', launch.browser = FALSE)"],
+      "port": 4599
+    }
+  ]
+}

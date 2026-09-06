@@ -50,7 +50,8 @@ if (!file.exists(src)) stop("no such bundle: ", src)
 # Exactly the objects referenced as B$... in the app. Anything not on this list
 # is analysis scaffolding the app has no use for.
 KEEP <- c("board", "outings", "mix", "prof", "xo",
-          "V_lg", "lg_xouts", "meta", "economy", "outcome_value", "lg_prof")
+          "V_lg", "lg_xouts", "meta", "economy", "outcome_value", "lg_prof",
+          "starts_daily", "track_pitches")
 
 B <- readRDS(src)
 missing <- setdiff(KEEP, names(B))
@@ -84,4 +85,4 @@ chk <- readRDS(file.path(DEPLOY_DIR, "data", "bundle.rds"))
 bad <- KEEP[!vapply(KEEP, function(k)
   !is.null(chk[[k]]) && length(chk[[k]]) > 0, TRUE)]
 cat(if (length(bad)) paste("\nWARNING empty:", paste(bad, collapse = ", "), "\n")
-    else "\nsmoke test: all 11 objects present\n")
+    else sprintf("\nsmoke test: all %d objects present\n", length(KEEP)))
