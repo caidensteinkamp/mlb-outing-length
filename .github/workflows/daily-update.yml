@@ -77,6 +77,7 @@ jobs:
             any::cpp11
             any::Rcpp
             any::later
+            any::jsonlite
 
       - name: Restore Savant chunk cache
         uses: actions/cache@v4
@@ -102,9 +103,23 @@ jobs:
       - name: Smoke test the app
         run: Rscript smoke_test.R mlb_outing_deploy
 
+      # RENV_CONFIG_REPOS_OVERRIDE is the load-bearing line here.
+      #
+      # rsconnect builds its manifest through renv, and renv resolves each
+      # package's DESCRIPTION `Repository:` NAME into a URL using its OWN repos
+      # config -- not getOption("repos") set inside deploy.R. When the lookup
+      # fails it writes the bare name, and the shinyapps.io build server then
+      # tries to fetch "CRAN/src/contrib/data.table_1.18.6.1.tar.gz" and dies
+      # with "Unsupported url scheme". Identical failure appeared as
+      # "RSPM/src/contrib/..." while installing from Posit Package Manager, which
+      # is what proves it is a name-resolution bug rather than a bad repo choice.
+      #
+      # This env var forces renv to use a real URL, and being an env var it
+      # survives into whatever process renv runs the snapshot in.
       - name: Deploy to shinyapps.io
         run: Rscript deploy.R
         env:
+          RENV_CONFIG_REPOS_OVERRIDE: https://cloud.r-project.org
           SHINY_ACCOUNT:  ${{ secrets.SHINYAPPS_ACCOUNT }}
           SHINY_TOKEN:    ${{ secrets.SHINYAPPS_TOKEN }}
           SHINY_SECRET:   ${{ secrets.SHINYAPPS_SECRET }}

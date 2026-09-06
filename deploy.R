@@ -65,6 +65,25 @@ if (!have_env && !have_saved)
          paste0("Partially set, which is why this failed: missing ",
                 paste(need[!nzchar(vals)], collapse = ", "), "\n") else "")
 
+# Diagnostic. This failure mode is invisible from the R side -- the deploy call
+# succeeds locally and only the shinyapps.io build server rejects the manifest --
+# so print the two values that decide it before shipping anything.
+cat("\n-- manifest inputs --\n")
+print(getOption("repos"))
+local({
+  mf <- file.path(APP_DIR, "manifest.json")
+  on.exit(unlink(mf), add = TRUE)
+  try({
+    rsconnect::writeManifest(APP_DIR)
+    j <- jsonlite::fromJSON(mf, simplifyVector = FALSE)
+    p <- j$packages[["data.table"]]
+    cat("data.table  Source:", p$Source, " Repository:", p$Repository, "\n")
+    if (is.null(p$Repository) || !grepl("^https?://", p$Repository))
+      cat("!! Repository is not a URL -- the build server will reject this\n")
+  }, silent = FALSE)
+})
+cat("---------------------\n\n")
+
 if (have_env) {
   rsconnect::setAccountInfo(name   = vals[["SHINY_ACCOUNT"]],
                             token  = vals[["SHINY_TOKEN"]],
