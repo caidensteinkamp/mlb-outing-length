@@ -61,23 +61,33 @@ jobs:
       # These comments live OUTSIDE the packages block on purpose: `packages: |`
       # is a YAML literal block scalar, so a `#` line inside it is not a comment
       # -- it gets handed to pak as R code, which fails with "unexpected symbol".
+      # Package names are listed WITHOUT pak's `any::` prefix on purpose.
+      #
+      # With `any::data.table`, pak records the install source as the ref "any",
+      # and rsconnect's manifest then reads:
+      #     data.table  Source: any  Repository: CRAN
+      # Because the source is not recognised as CRAN, the repository is left as
+      # the bare NAME instead of being resolved to a URL, and the shinyapps.io
+      # build server dies with "Unsupported url scheme: CRAN/src/contrib/...".
+      # Installed locally with plain install.packages(), the same package gives
+      # Source: CRAN and a real Repository URL, which is what the server needs.
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:
           packages: |
-            any::data.table
-            any::dplyr
-            any::tidyr
-            any::purrr
-            any::stringr
-            any::ggplot2
-            any::shiny
-            any::DT
-            any::ggrepel
-            any::rsconnect
-            any::cpp11
-            any::Rcpp
-            any::later
-            any::jsonlite
+            data.table
+            dplyr
+            tidyr
+            purrr
+            stringr
+            ggplot2
+            shiny
+            DT
+            ggrepel
+            rsconnect
+            cpp11
+            Rcpp
+            later
+            jsonlite
 
       - name: Restore Savant chunk cache
         uses: actions/cache@v4
