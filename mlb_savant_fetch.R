@@ -85,8 +85,31 @@ KEEP <- c(
   "launch_speed", "launch_angle", "estimated_woba_using_speedangle",
   "woba_value", "woba_denom", "delta_run_exp",
   # scoring, for runs-allowed per PA
-  "bat_score", "post_bat_score", "fld_score", "post_fld_score"
+  "bat_score", "post_bat_score", "fld_score", "post_fld_score",
+  # batted-ball location and defensive alignment, for the spray run-value model.
+  # hc_x/hc_y are STRINGER-placed pixel coordinates on a Gameday field image --
+  # good for DIRECTION, useless as a distance (they disagree with
+  # hit_distance_sc by a median of 30 ft because one is where the ball was
+  # fielded and the other is projected flight).
+  "hc_x", "hc_y", "hit_distance_sc",
+  "if_fielding_alignment", "of_fielding_alignment"
 )
+
+# Cache schema version, derived from KEEP itself.
+#
+# Chunks are cached as reduced RDS holding only the KEEP columns, so ADDING a
+# column silently invalidates every cached chunk -- rbindlist(fill = TRUE) would
+# happily glue old chunks (no hc_x) to new ones and hand back a season whose
+# coordinates are NA for everything downloaded before the change. Nothing errors;
+# the model just quietly fits on a fraction of the data.
+#
+# Hashing the column set into the cache path means a KEEP change starts a clean
+# cache automatically instead of depending on someone remembering to purge it.
+SCHEMA_TAG <- local({
+  f <- tempfile(); on.exit(unlink(f), add = TRUE)
+  writeLines(paste(sort(KEEP), collapse = ","), f)
+  substr(unname(tools::md5sum(f)), 1, 8)
+})
 
 savant_chunk_url <- function(season, from, to) {
   paste0(
@@ -172,7 +195,7 @@ fetch_season <- function(season, force = FALSE) {
   # all 66 chunks in memory and assembled at the end; a crash on the LAST chunk
   # threw away the entire 40-minute download. Caching per chunk makes a re-run
   # cost only what actually failed.
-  cdir <- file.path(RAW_DIR, "chunks", as.character(season))
+  cdir <- file.path(RAW_DIR, "chunks", as.character(season), SCHEMA_TAG)
   dir.create(cdir, showWarnings = FALSE, recursive = TRUE)
 
   parts <- vector("list", length(edges))

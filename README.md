@@ -57,6 +57,73 @@ Pitch-level detail for the curves is retained for the last `OL_TRACK_DAYS` days
 under a megabyte, and nobody opens a tracker to read April. The per-start table
 covers the whole season regardless.
 
+## Batted-ball direction and run value
+
+`spray_run_value.R` is a second, hitter-side model on the same data: what a ball
+in play is worth given *where* it goes, and how that changes with runners on.
+Outputs `spray_direction.png`, `spray_field_map.png`, and `spray_bundle.rds`.
+
+Same two-stage shape as the outing-length build — separate what happened from
+what it was worth in that situation — but priced through run expectancy over
+(bases, outs) instead of a DP over (pitches, count, outs).
+
+### Three things it has to get right
+
+**Coordinates.** `hc_x`/`hc_y` are stringer-placed pixels on a Gameday field
+image. The pixel→feet scale solves empirically to **2.303 ft/px** (R² = 0.96
+against `hit_distance_sc`), but the radius is *not* usable: the two disagree by
+a median of **30 ft**, because `hc_*` is where the ball was fielded and
+`hit_distance_sc` is projected flight. Angle from the stringer, depth from
+Statcast.
+
+**Handedness.** Raw spray averages −3.8° for righties and +7.3° for lefties,
+each toward his own pull side. Validation that the mirror is right: home runs
+come out 81% / 84% pulled, and by batted-ball type the ordering is grounders
+(+15.0°) → liners (+5.9°) → fly balls (−2.8°) → popups (−19.8°).
+
+**The confound.** Direction is entangled with contact quality — mean launch
+angle falls from 25° on oppo balls to 4° on heavily pulled ones, HR rate 2% → 9%.
+Every number below holds exit velocity and launch angle fixed.
+
+### Two coordinate systems, not one
+
+This is the subtle part, and the first version of the model got it wrong.
+
+- **Outcome quality** (does it become a hit?) is a **pull-relative** fact — it
+  depends on where the ball is relative to how the defense plays *this* hitter.
+- **Runner advancement** (does the runner reach third?) is an **absolute
+  field-side** fact — the throw goes away from third base when the ball is hit
+  to the right side, and that is true regardless of the batter's hands.
+
+A model carrying only pull-relative direction averages the advancement effect
+toward zero across handedness, because the productive-out direction is the
+opposite field for a righty and the pull side for a lefty. Both terms are needed;
+they stay jointly identifiable because the sign relation between them flips with
+the batter's hand.
+
+### What it finds
+
+Fitted on **109,305 balls in play** (2026), 32.8% deviance explained.
+
+The dominant effect is launch-angle dependent and large. Holding exit velocity at
+88 mph, pull-minus-oppo run value:
+
+| Batted ball | Pull − oppo |
+|---|---|
+| Fly ball (25°) | **+0.34** |
+| Line drive (10°) | −0.08 |
+| Ground ball (−5°) | −0.11 |
+
+Pull your fly balls; go the other way on the ground. That is not "pulled balls
+are hit harder" — exit velocity is held fixed.
+
+The productive-out effect is **real but small and asymmetric**. With a runner on
+second and under two outs, relative to the same ball with the bases empty, the
+right side is worth **+0.034 runs for right-handed hitters** — and *−0.049 for
+lefties*, which contradicts the tactical story. The magnitudes are an order below
+the fly-ball effect. Treat "hit behind the runner" as a small real edge for
+righties and unproven for lefties, not as a headline.
+
 ## Pipeline
 
 | Script | Does | Runtime |
