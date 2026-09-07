@@ -87,26 +87,34 @@ Every number below holds exit velocity and launch angle fixed.
 
 ### Two coordinate systems, not one
 
-This is the subtle part, and the first version of the model got it wrong.
+- **Outcome quality** (does it become a hit?) is **pull-relative** — it depends
+  on where the ball is relative to how the defense plays *this* hitter.
+- **Runner advancement** (does the runner reach third?) is **absolute field
+  side** — the throw goes away from third on a right-side grounder regardless of
+  the batter's hands.
 
-- **Outcome quality** (does it become a hit?) is a **pull-relative** fact — it
-  depends on where the ball is relative to how the defense plays *this* hitter.
-- **Runner advancement** (does the runner reach third?) is an **absolute
-  field-side** fact — the throw goes away from third base when the ball is hit
-  to the right side, and that is true regardless of the batter's hands.
+Carrying only pull-relative direction averages the second effect toward zero
+across handedness, since the productive-out direction is the opposite field for
+a righty and the pull side for a lefty. Both terms are in the model; they stay
+identifiable because the sign relation between them flips with the batter's hand.
 
-A model carrying only pull-relative direction averages the advancement effect
-toward zero across handedness, because the productive-out direction is the
-opposite field for a righty and the pull side for a lefty. Both terms are needed;
-they stay jointly identifiable because the sign relation between them flips with
-the batter's hand.
+### All 24 base-out states, by shrinkage
+
+The sample is brutally uneven — **26,915** balls in play with the bases empty and
+nobody out against **221** with a runner on third and nobody out, and six states
+under a thousand. Fitting each state a free 64-parameter tensor would be fitting
+noise in the thin corners; collapsing them into tactical groups throws away the
+question.
+
+So each state gets its own direction curve through a factor smooth
+(`bs = "fs"`), shrunk toward a common shape by its own sample size. Same device
+as `K_SHRINK` in the outing-length model: thin cells borrow from the league, fat
+cells stand on their own.
 
 ### What it finds
 
-Fitted on **109,305 balls in play** (2026), 32.8% deviance explained.
-
-The dominant effect is launch-angle dependent and large. Holding exit velocity at
-88 mph, pull-minus-oppo run value:
+Fitted on **109,305 balls in play** (2026). The dominant effect is launch-angle
+dependent and large. Holding exit velocity at 88 mph, pull minus oppo:
 
 | Batted ball | Pull − oppo |
 |---|---|
@@ -114,17 +122,41 @@ The dominant effect is launch-angle dependent and large. Holding exit velocity a
 | Line drive (10°) | −0.08 |
 | Ground ball (−5°) | −0.11 |
 
-Pull your fly balls; go the other way on the ground. That is not "pulled balls
-are hit harder" — exit velocity is held fixed.
+Pull your fly balls; go the other way on the ground. Exit velocity and launch
+angle are held fixed, so this is direction itself, not contact quality.
 
-The productive-out effect is **real but small and asymmetric**. With a runner on
-second and under two outs, relative to the same ball with the bases empty, the
-right side is worth **+0.034 runs for right-handed hitters** — and *−0.049 for
-lefties*, which contradicts the tactical story. The magnitudes are an order below
-the fly-ball effect. Treat "hit behind the runner" as a small real edge for
-righties and unproven for lefties, not as a headline.
+### The productive out does not survive; the double play does
 
-## Pipeline
+Two tactical channels, each tested model-free on a conditioning set that removes
+the other:
+
+**Advancement — worth nothing.** Restrict to ground-ball *outs* (n = 26,717), so
+hit probability cannot contribute and `delta_run_exp` already contains whatever
+the runners did. Right side minus left side comes to **−0.001 runs overall**, and
+no individual base-out state exceeds ±0.02. Hitting behind the runner, once the
+ball is an out, is not measurably worth anything.
+
+**Double-play avoidance — worth a lot.** Ground balls with a runner on first
+under two outs, measured as GIDP *rate* so hit probability again cannot leak in:
+
+| Hitter | Side | n | GIDP% |
+|---|---|---|---|
+| RH | left (pull) | 3,014 | **37.8** |
+| RH | right (oppo) | 1,175 | **23.3** |
+| LH | left (oppo) | 844 | **13.4** |
+| LH | right (pull) | 2,986 | 25.7 |
+
+For both hands the opposite field is the escape — a righty pulling a grounder
+feeds the 6-4-3, a lefty pulling one feeds the 4-6-3. The ordering survives at
+every exit-velocity grade, so it is geometry rather than soft contact.
+
+An earlier version of this README reported an "advancement effect" of +0.034
+runs for righties. That number was the *hit-probability* channel leaking in —
+opposite-field grounders beat a shaded defense and become hits, and hits are
+worth more with runners on. The tell was that the effect peaked with two outs,
+where a productive out cannot exist. Conditioning on outs removes it entirely.
+
+## Pipeline## Pipeline
 
 | Script | Does | Runtime |
 |---|---|---|

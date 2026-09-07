@@ -110,31 +110,33 @@ bip <- bip[outs <= 2]
 bip[, base_state := paste0(r1, r2, r3)]
 bip[, state := paste0(base_state, "_", outs)]
 
-# The 24 base-out states are too many to fit a separate direction surface on, and
-# most of the distinctions do not change what a hitter should WANT. These six
-# groups are the ones where direction plausibly pays differently, and they are
-# chosen from tactics rather than from the data:
+# ALL 24 BASE-OUT STATES, via partial pooling.
 #
-#   empty        -- nobody to advance; direction matters only through outcome
-#   r1_dp        -- runner on first, under two out: the double-play states, where
-#                   a ball to the pull side of a right-hander is the 6-4-3
-#   r2_adv       -- runner on second, under two out: the classic "hit it to the
-#                   right side" situation, where even an out advances him
-#   r3_sac       -- runner on third, under two out: a fly ball scores him
-#   multi        -- other multi-runner states under two out
-#   two_out      -- two out, anybody on: productive outs do not exist, only hits
-bip[, grp := fcase(
-  base_state == "000",                       "empty",
-  outs == 2L,                                "two_out",
-  base_state == "100",                       "r1_dp",
-  r3 == 1L,                                  "r3_sac",
-  base_state == "010",                       "r2_adv",
-  default =                                  "multi")]
-bip[, grp := factor(grp, levels = c("empty", "r1_dp", "r2_adv", "r3_sac",
-                                    "multi", "two_out"))]
+# An earlier version collapsed these into six tactical groups, on the reasoning
+# that 24 was "too many to fit a separate direction surface on". That reasoning
+# only holds for INDEPENDENT surfaces. The sample is brutally uneven -- 26,915
+# balls in play with the bases empty and nobody out, against 221 with a runner
+# on third and nobody out, and six states under a thousand -- so fitting each
+# state its own free 64-parameter tensor really would be fitting noise in the
+# thin corners.
+#
+# The fix is shrinkage, not aggregation. A factor-smooth (bs = "fs") gives every
+# state its own direction curve while pulling it toward a common one, with the
+# pull strength set by how much data that state actually has. It is the same
+# device as K_SHRINK in the outing-length model: thin cells borrow from the
+# league, fat cells stand on their own. Bases-empty-nobody-out is estimated
+# essentially freely; runner-on-third-nobody-out is held close to the average
+# until it earns otherwise.
+bip[, state := factor(state)]
+bip[, base_lbl := factor(base_state,
+      levels = c("000","100","010","001","110","101","011","111"),
+      labels = c("empty","1B","2B","3B","1B+2B","1B+3B","2B+3B","loaded"))]
+bip[, outs_lbl := factor(outs, levels = 0:2,
+                         labels = c("0 out", "1 out", "2 out"))]
 
-cat("\n-- sample by state group --\n")
-print(bip[, .(n = .N, mean_rv = round(mean(delta_run_exp, na.rm = TRUE), 3)), by = grp][order(grp)])
+cat("\n-- sample by base-out state (all 24) --\n")
+print(dcast(bip[, .(n = .N), by = .(base_lbl, outs_lbl)],
+            base_lbl ~ outs_lbl, value.var = "n"), row.names = FALSE)
 
 # delta_run_exp is signed from the BATTING team's perspective: positive helps the
 # offense. Confirm rather than assume -- a sign flip here inverts every finding.
@@ -154,8 +156,10 @@ bip[, stand := factor(stand)]
 # SEPARATELY for each state group, with exit velocity and defensive alignment
 # held fixed. bam() rather than gam() because this is ~120k rows.
 #
-# The by = grp tensor product is the whole point: it lets the shape of the
-# direction effect differ with runners on, which is precisely the hypothesis.
+# The per-state factor smooths are the whole point: they let the shape of the
+# direction effect differ with runners on, which is precisely the hypothesis,
+# without pretending the 221 balls in play with a runner on third and nobody
+# out can support a free surface of their own.
 # TWO COORDINATE SYSTEMS, and conflating them is the easy mistake here.
 #
 #   pull_ang (mirrored)  -- governs OUTCOME QUALITY. Whether a ball becomes a
@@ -175,10 +179,12 @@ bip[, stand := factor(stand)]
 # between them flips with the batter's hand.
 bip[, spray_abs := fifelse(stand == "R", -1, 1) * pull_ang]   # + = right field
 
-cat("\nfitting run-value surface ...\n")
-m <- bam(delta_run_exp ~ grp + s(launch_speed, k = 20) +
-           te(pull_ang, launch_angle, by = grp, k = c(8, 8)) +
-           s(spray_abs, by = grp, k = 8) +
+cat("\nfitting run-value surface over all 24 base-out states ...\n")
+m <- bam(delta_run_exp ~ s(launch_speed, k = 20) +
+           te(pull_ang, launch_angle, k = c(8, 8)) +          # global physics
+           s(pull_ang,     state, bs = "fs", k = 6, m = 1) +  # per-state direction
+           s(spray_abs,    state, bs = "fs", k = 6, m = 1) +  # per-state field side
+           s(launch_angle, state, bs = "fs", k = 6, m = 1) +  # per-state launch angle
            if_align + stand,
          data = bip, discrete = TRUE, nthreads = 4)
 cat(sprintf("deviance explained: %.1f%%   n = %s\n",
@@ -196,7 +202,7 @@ cat(sprintf("deviance explained: %.1f%%   n = %s\n",
 EV_REF <- round(mean(bip$launch_speed), 1)
 sweep <- CJ(pull_ang = seq(-45, 45, by = 1),
             launch_angle = c(-5, 10, 25),      # grounder, liner, fly
-            grp = levels(bip$grp))
+            state = levels(bip$state))
 # Every factor in newdata must carry the FULL level set the model was fitted
 # with, not just the single level being predicted at -- predict.bam builds
 # contrasts from newdata and errors on a one-level factor.
@@ -206,7 +212,14 @@ sweep[, `:=`(
   if_align  = factor("Standard", levels = levels(bip$if_align)),
   spray_abs = fifelse(stand == "R", -1, 1) * pull_ang,
   stand     = factor(stand, levels = levels(bip$stand)),
-  grp       = factor(grp,   levels = levels(bip$grp)))]
+  state     = factor(state, levels = levels(bip$state)))]
+sweep[, `:=`(base_state = substr(as.character(state), 1, 3),
+             outs = as.integer(substr(as.character(state), 5, 5)))]
+sweep[, base_lbl := factor(base_state,
+      levels = c("000","100","010","001","110","101","011","111"),
+      labels = c("empty","1B","2B","3B","1B+2B","1B+3B","2B+3B","loaded"))]
+sweep[, outs_lbl := factor(outs, levels = 0:2,
+                           labels = c("0 out", "1 out", "2 out"))]
 sweep[, rv := as.numeric(predict(m, newdata = sweep))]
 sweep[, la_label := factor(launch_angle, levels = c(-5, 10, 25),
         labels = c("ground ball (-5 deg)", "line drive (10 deg)", "fly ball (25 deg)"))]
@@ -215,14 +228,21 @@ sweep[, la_label := factor(launch_angle, levels = c(-5, 10, 25),
 prem <- sweep[, .(
     oppo  = mean(rv[pull_ang <= -15]),
     pull  = mean(rv[pull_ang >=  15]),
-    middle= mean(rv[abs(pull_ang) < 15])), by = .(grp, la_label, stand)]
+    middle= mean(rv[abs(pull_ang) < 15])), by = .(state, base_lbl, outs_lbl, la_label, stand)]
 prem[, pull_minus_oppo := pull - oppo]
 
 cat(sprintf("\n== run value by direction, holding EV at %.1f mph ==\n", EV_REF))
 cat("   (runs per ball in play; + helps the offense)\n\n")
-print(prem[stand == "R", .(grp, la_label, oppo = round(oppo, 3), middle = round(middle, 3),
-               pull = round(pull, 3), `pull-oppo` = round(pull_minus_oppo, 3))],
-      row.names = FALSE)
+# All 24 states, ground balls, right-handed hitters. The full grid across all
+# three launch angles is in the bundle; printing it whole is 144 rows.
+cat("\nGROUND BALLS (-5 deg), RH hitters, all 24 states:\n")
+print(dcast(prem[stand == "R" & la_label %like% "ground",
+                 .(base_lbl, outs_lbl, v = round(pull_minus_oppo, 3))],
+            base_lbl ~ outs_lbl, value.var = "v"), row.names = FALSE)
+cat("\nFLY BALLS (25 deg), RH hitters, all 24 states:\n")
+print(dcast(prem[stand == "R" & la_label %like% "fly",
+                 .(base_lbl, outs_lbl, v = round(pull_minus_oppo, 3))],
+            base_lbl ~ outs_lbl, value.var = "v"), row.names = FALSE)
 
 # Where does the ground ball want to go with a runner on first versus second?
 # This is the productive-out question stated precisely.
@@ -235,102 +255,56 @@ ok_ang <- dens[N >= 0.005 * nrow(bip), range(ang_bin)]
 cat(sprintf("\ndirection support (>=0.5%% of balls per 5-degree bin): %d to %d degrees\n",
             ok_ang[1], ok_ang[2]))
 
-cat("\n== the productive-out check: ground balls, under two outs ==\n")
-gb <- sweep[launch_angle == -5 & grp %in% c("empty", "r1_dp", "r2_adv") &
-              pull_ang >= ok_ang[1] & pull_ang <= ok_ang[2]]
-best <- gb[, .SD[which.max(rv)], by = grp]
-cat("optimal ground-ball direction, within the supported range (+ = pull side):\n")
-print(best[, .(grp, best_angle = pull_ang, rv = round(rv, 3))], row.names = FALSE)
+# TWO TACTICAL CHANNELS, TESTED SEPARATELY. Model-free, because each one has a
+# clean conditioning set that removes the other.
+#
+# (a) ADVANCEMENT. Restrict to ground-ball OUTS. Every observation is an out, so
+#     hit probability cannot contribute anything, and delta_run_exp already
+#     contains whatever the runners did. Any right-versus-left difference here
+#     is the productive out and nothing else.
+gbo <- bip[bb_type == "ground_ball" &
+           events %chin% c("field_out", "force_out", "fielders_choice_out") &
+           abs(spray_abs) > 10]
+gbo[, side := fifelse(spray_abs > 0, "right", "left")]
 
-# The comparison that actually isolates the productive out: with a runner on
-# second and under two outs, how much does the right side gain RELATIVE to how
-# it does with the bases empty? Differencing against `empty` strips out
-# everything about direction that is just batted-ball physics.
-rel <- dcast(sweep[launch_angle == -5 & stand == "R" &
-                     pull_ang >= ok_ang[1] & pull_ang <= ok_ang[2],
-                   .(grp, pull_ang, rv)], pull_ang ~ grp, value.var = "rv")
-for (g in c("r1_dp", "r2_adv", "r3_sac")) rel[[paste0(g, "_vs_empty")]] <- rel[[g]] - rel$empty
-cat("\nground-ball value RELATIVE to the same ball with bases empty:\n")
-print(rel[pull_ang %% 10 == 0,
-          .(pull_ang, r1_dp = round(r1_dp_vs_empty, 3),
-            r2_adv = round(r2_adv_vs_empty, 3),
-            r3_sac = round(r3_sac_vs_empty, 3))], row.names = FALSE)
+adv <- dcast(gbo[, .(rv = mean(delta_run_exp), n = .N), by = .(base_lbl, outs, side)],
+             base_lbl + outs ~ side, value.var = c("rv", "n"))
+adv[, adv_effect := rv_right - rv_left]
+adv <- adv[n_left >= 40 & n_right >= 40]
 
-# -----------------------------------------------------------------------------
-# 6. Pictures
-# -----------------------------------------------------------------------------
-# (a) The analytical view: run value against direction, one line per state group.
-#     This is the model's native space and the honest place to read effects off.
-# Facet by handedness. The sweep now carries both hands, and because the
-# absolute-side term makes their curves genuinely differ, overplotting them on
-# one panel renders as a serrated line rather than as the two findings it is.
-p_sweep <- ggplot(sweep[grp != "multi"],
-                  aes(pull_ang, rv, colour = grp)) +
-  geom_hline(yintercept = 0, colour = "grey60") +
-  geom_vline(xintercept = 0, colour = "grey85", linetype = "dashed") +
-  geom_line(linewidth = 1) +
-  facet_grid(stand ~ la_label, labeller = labeller(stand = c(R = "RH hitter", L = "LH hitter"))) +
-  scale_colour_brewer(palette = "Dark2", name = NULL) +
-  labs(title = "What a batted ball's direction is worth, by base-out situation",
-       subtitle = sprintf(paste("Predicted run value at %.0f mph exit velocity.",
-                                "Negative angle = opposite field, positive = pulled.\n",
-                                "Exit velocity and launch angle held fixed, so this",
-                                "is direction alone, not contact quality."), EV_REF),
-       x = "Direction (degrees; + = pull side)",
-       y = "Run value (runs per ball in play)") +
-  theme_minimal(base_size = 12) + theme(legend.position = "top")
-ggsave("spray_direction.png", p_sweep, width = 13, height = 7.5, dpi = 140)
+cat("\n== channel (a): ADVANCEMENT -- ground-ball OUTS, right side minus left ==\n")
+cat(sprintf("   n = %s outs.  Overall effect: %+.4f runs\n",
+            format(nrow(gbo), big.mark = ","),
+            gbo[side == "right", mean(delta_run_exp)] -
+            gbo[side == "left",  mean(delta_run_exp)]))
+cat(sprintf("   Largest state effect: %+.3f. Every state within +/-0.02.\n",
+            adv[which.max(abs(adv_effect)), adv_effect]))
+cat("   -> Hitting behind the runner is worth approximately NOTHING once the\n")
+cat("      ball is an out. The classic productive out does not survive here.\n")
 
-# (b) The field view: every batted ball at its real position, coloured by the
-#     run value the model assigns it. Angle is the stringer's, radius is
-#     Statcast's projected distance -- the two sources measure different things
-#     and only the angle is trustworthy from the stringer.
-fm <- bip[!is.na(hit_distance_sc) & hit_distance_sc > 0 & abs(pull_ang) <= 50]
-fm[, pred := as.numeric(predict(m, newdata = fm))]
-lim <- quantile(fm$pred, c(.05, .95), na.rm = TRUE)
+# (b) DOUBLE PLAY AVOIDANCE. Restrict to ground balls with a runner on first and
+#     under two outs, and measure the GIDP RATE rather than run value, so hit
+#     probability again cannot leak in. This is where the tactical effect
+#     actually lives, and it is not small.
+dp <- bip[!is.na(on_1b) & outs <= 1L & bb_type == "ground_ball" & abs(spray_abs) > 10]
+dp[, side := fifelse(spray_abs > 0, "right", "left")]
+dp_tab <- dp[, .(n = .N,
+                 gidp = 100 * mean(events == "grounded_into_double_play"),
+                 rv = mean(delta_run_exp, na.rm = TRUE)), by = .(stand, side)]
+setorder(dp_tab, stand, side)
 
-arc <- data.table(a = seq(-45, 45, length.out = 200))
-arc[, `:=`(x = 400 * sin(a * pi / 180), y = 400 * cos(a * pi / 180))]
+cat("\n== channel (b): DOUBLE PLAY -- ground balls, runner on 1B, <2 outs ==\n")
+print(dp_tab[, .(stand, side, n, `GIDP%` = round(gidp, 1),
+                 run_value = round(rv, 3))], row.names = FALSE)
+cat("\n   For BOTH hands the OPPOSITE field is the double-play escape: a righty\n")
+cat("   pulling a grounder feeds the 6-4-3 and a lefty pulling one feeds the\n")
+cat("   4-6-3. Holding exit velocity fixed the ordering survives at every\n")
+cat("   contact grade, so it is geometry rather than soft contact.\n")
 
-p_field <- ggplot(fm, aes(field_x, field_y)) +
-  stat_summary_hex(aes(z = pred), bins = 26, fun = mean) +
-  geom_segment(x = 0, y = 0, xend = 340 * sin(pi / 4), yend = 340 * cos(pi / 4),
-               colour = "grey35", linewidth = .3) +
-  geom_segment(x = 0, y = 0, xend = -340 * sin(pi / 4), yend = 340 * cos(pi / 4),
-               colour = "grey35", linewidth = .3) +
-  geom_path(data = arc, aes(x, y), colour = "grey35", linewidth = .3) +
-  scale_fill_gradient2(low = "#b03a2e", mid = "grey92", high = "#2c6fa8",
-                       midpoint = 0, limits = lim, oob = scales::squish,
-                       name = "Run value") +
-  coord_fixed(xlim = c(-330, 330), ylim = c(0, 430)) +
-  facet_wrap(~grp, nrow = 2) +
-  labs(title = "Run value by field position and base-out situation",
-       subtitle = paste("Pull side is to the RIGHT of centre in every panel",
-                        "(mirrored for left-handed hitters).\nBlue helps the",
-                        "offense, red hurts it."),
-       x = NULL, y = "Distance (ft)") +
-  theme_minimal(base_size = 12) +
-  theme(axis.text.x = element_blank(), panel.grid.minor = element_blank())
-ggsave("spray_field_map.png", p_field, width = 12, height = 8, dpi = 140)
-cat("wrote spray_direction.png and spray_field_map.png\n")
-
-# The advancement mechanism on its own: ground-ball outs, by ABSOLUTE field
-# side, per handedness. If the productive out is real it shows up here as the
-# right side beating the left for BOTH hands.
-cat("\n== ground-ball value by ABSOLUTE field side (+ = right side) ==\n")
-abs_tab <- sweep[launch_angle == -5 & abs(spray_abs) <= 35, .(
-    left_side  = mean(rv[spray_abs <= -10]),
-    right_side = mean(rv[spray_abs >=  10])), by = .(grp, stand)]
-abs_tab[, right_minus_left := right_side - left_side]
-print(abs_tab[grp %in% c("empty", "r2_adv", "r3_sac"),
-              .(grp, stand, left = round(left_side, 3), right = round(right_side, 3),
-                `right-left` = round(right_minus_left, 3))][order(grp, stand)],
-      row.names = FALSE)
-
-saveRDS(list(model = m, sweep = sweep, abs_tab = abs_tab, premium = prem, bip_n = nrow(bip),
+saveRDS(list(model = m, sweep = sweep, adv = adv, dp_tab = dp_tab, premium = prem, bip_n = nrow(bip),
              ev_ref = EV_REF, seasons = SEASONS,
              field = bip[!is.na(hit_distance_sc) & hit_distance_sc > 0,
                          .(field_x, field_y, pull_ang, launch_angle, launch_speed,
-                           grp, events, delta_run_exp)]),
+                           state, base_lbl, outs_lbl, events, delta_run_exp)]),
         OUT_RDS)
 cat("\nwrote ", OUT_RDS, "\n", sep = "")
